@@ -26,3 +26,6 @@ Save the script and you're done. You can already test it but running the inbound
 One last thing to do is to add triggers. The most important one is to create a trigger based on updates in the external calendar and have it call the inboundSync method. It's quite straightforward. If you have edit rights in the external calendar, you can do the same for the internal calendar and have that one call the outboundSync method instead.
 
 ![image](https://user-images.githubusercontent.com/1446282/124452251-81ebc300-dd86-11eb-91f8-308ededabac1.png)
+
+## Known issues
+If you have too many meetings in the upcoming x days, you'll run into the rate limiting of google calendar. No worries. Syncing it muliple times will still eventually sync all your meetings. As the script will then run with every update it will only do incremental updates so the amount of meeting creation & deletion **should** remain minimal and never cause any issues.
