@@ -74,6 +74,10 @@ var calendarSync = function (configuration) {
 
         for (let sourceEventIndex in sourceEvents) {
             sourceEvent = sourceEvents[sourceEventIndex];
+            if (sourceEvent.getMyStatus() != CalendarApp.GuestStatus.YES && sourceEvent.getMyStatus() != CalendarApp.GuestStatus.OWNER) {
+                console.log('skipping ' + sourceEvent.getTitle() + ' because not confirmed attendance yet: ' + sourceEvent.getMyStatus());
+                continue;
+            }
             // don't copy it because we'll end up in a loop!
             if (identifierRegex.test(sourceEvent.getDescription())) {
                 console.log('skipping ' + sourceEvent.getTitle());
