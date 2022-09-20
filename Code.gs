@@ -60,11 +60,7 @@ var calendarSync = function (configuration) {
                     &&
                     (targetEvents[targetEventIndex].getEndTime().getTime() == sourceEvent.getEndTime().getTime())
                     &&
-                    (
-                        targetEvents[targetEventIndex].getDescription().endsWith(config.identifierTemplate.replace('.*', sourceEvent.getId()))
-                        ||
-                        sourceEvent.getDescription().endsWith('[' + targetEvents[targetEventIndex].getId() + ':mwlsync]')
-                    )
+                    targetEvents[targetEventIndex].getDescription().endsWith(config.identifierTemplate.replace('.*', sourceEvent.getId()))   
                 ) {
                     return targetEventIndex;
                 }
