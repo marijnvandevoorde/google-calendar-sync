@@ -33,8 +33,8 @@ var calendarSync = function (configuration) {
         for (event in events) {
             var currentEvent = events[event];
             if (identifierRegex.test(currentEvent.getDescription())) {
-                //currentEvent.deleteEvent();
-                console.log(currentEvent.getTitle());
+                currentEvent.deleteEvent();
+                console.log("Deleted " + currentEvent.getTitle());
             }
         }
     }
