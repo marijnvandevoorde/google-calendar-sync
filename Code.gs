@@ -74,20 +74,27 @@ var calendarSync = function (configuration) {
 
         for (let sourceEventIndex in sourceEvents) {
             sourceEvent = sourceEvents[sourceEventIndex];
-            if (sourceEvent.getMyStatus() != CalendarApp.GuestStatus.YES && sourceEvent.getMyStatus() != CalendarApp.GuestStatus.OWNER) {
+ 
+            if (sourceEvent.getCreators().indexOf(sourceCalendar.getId()) === -1 && sourceEvent.getMyStatus() != CalendarApp.GuestStatus.YES) {
                 console.log('skipping ' + sourceEvent.getTitle() + ' because not confirmed attendance yet: ' + sourceEvent.getMyStatus());
                 continue;
             }
+
+            if (sourceEvent.transparency === "transparent") {
+                console.log('skipping ' + sourceEvent.getTitle() + ' because transparent');
+                continue;
+
+            }
             // don't copy it because we'll end up in a loop!
             if (identifierRegex.test(sourceEvent.getDescription())) {
-                console.log('skipping ' + sourceEvent.getTitle());
+                console.log('skipping ' + sourceEvent.getTitle() + ' because target is original source');
                 continue;
 
             }
             let identicalEventIndex = searchIdentialEvent(sourceEvent, targetEvents, prefix);
 
             if (identicalEventIndex) {
-                console.log('skipping ' + sourceEvent.getTitle());
+                console.log('skipping ' + sourceEvent.getTitle() + ' because already added in a previous sync');
                 targetEvents.splice(identicalEventIndex, 1);
                 continue;
             }
@@ -145,6 +152,7 @@ var calendarSync = function (configuration) {
             config.externalPrefix,
             config.externalTransparency
         )
+        
     }
 
 
@@ -194,5 +202,3 @@ function runOutboundSync() {
 function runInboundSync() {
     calendarSync.inboundSync();
 }
-
-
