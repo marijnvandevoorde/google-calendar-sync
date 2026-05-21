@@ -20,10 +20,10 @@ Go to scripts.google.com and create a new project and give it a sensible name. A
   - daysInPast: Default '1'. Number of days to sync in the past. 
   - **identifierTemplate**: Default '&lt;xxx:.*:yyy&gt;' but best to replace the xxx and yyy with something unique to this sync. Maybe use your prefixes. **It's super important that this is unique if you run multiple syncs**.
 
-Save the script, and you're done. You can already test it but running the inbound or outbound sync methods. There are also utility methods to clean up events created by the script.
+Save the script, and you're done. You can already test it by running the `runInboundSync` or `runOutboundSync` functions. There are also utility functions (`cleanInternalCalendar` and `cleanExternalCalendar`) to clean up events created by the script.
 
 ## What now.
-One last thing to do is to add triggers. The most important one is to create a trigger based on updates in the external calendar and have it call the inboundSync method. It's quite straightforward. If you have edit rights in the external calendar, you can do the same for the internal calendar and have that one call the outboundSync method instead.
+One last thing to do is to add triggers. The most important one is to create a trigger based on updates in the external calendar and have it call the `runInboundSync` function. It's quite straightforward. If you have edit rights in the external calendar, you can do the same for the internal calendar and have that one call the `runOutboundSync` function instead.
 
 ![image](https://user-images.githubusercontent.com/1446282/124564507-701b2600-de41-11eb-8d71-0776bbd3d068.png)
 

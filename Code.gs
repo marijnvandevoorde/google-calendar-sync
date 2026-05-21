@@ -13,9 +13,10 @@ let config = {
     // # of days to sync in the future
     'daysAhead': 30,
     'daysInPast': 1,
-    //make sure it's unique avoid regex special chars at all cost! it'll fuck shit up.
-    // this is used both to recognize identifiers (hence the .* for the regex) as well as to create them. So it needs a .* because that will be replaced by id's.
-    // your best option is probably to just replace xxx and yyy by your external & internal prefixes and make sure there are no regex control characters in there. Stick to alphanumeric an you're good.
+    // Must be unique per sync. The '.*' is replaced by event ids; the rest is
+    // used verbatim both to build identifiers and as a RegExp to recognize them.
+    // Avoid regex special characters: replace xxx and yyy with your prefixes
+    // and stick to alphanumeric characters.
     'identifierTemplate': '<xxx:.*:yyy>'
 };
 
@@ -23,15 +24,23 @@ var calendarSync = function (configuration) {
     let config = configuration;
     let identifierRegex = new RegExp(config.identifierTemplate + '$');
 
-    function cleanCalendar(calendar, prefix) {
-        var since = new Date();
+    function getSyncWindow() {
+        let since = new Date();
         since.setDate(since.getDate() - config.daysInPast);
-        var until = new Date();
+        let until = new Date();
         until.setDate(until.getDate() + config.daysAhead);
-        var events = calendar.getEvents(since, until);
+        return {since: since, until: until};
+    }
 
-        for (event in events) {
-            var currentEvent = events[event];
+    function buildIdentifier(eventId) {
+        return config.identifierTemplate.replace('.*', eventId);
+    }
+
+    function cleanCalendar(calendar) {
+        let window = getSyncWindow();
+        let events = calendar.getEvents(window.since, window.until);
+
+        for (let currentEvent of events) {
             if (identifierRegex.test(currentEvent.getDescription())) {
                 currentEvent.deleteEvent();
                 console.log("Deleted " + currentEvent.getTitle());
@@ -41,41 +50,40 @@ var calendarSync = function (configuration) {
 
 
     function runSync(sourceCalendar, targetCalendar, prefix, transparency) {
-        let since = new Date();
-        since.setDate(since.getDate() - config.daysInPast);
-        let until = new Date();
-        until.setDate(until.getDate() + config.daysAhead);
-        let sourceEvents = sourceCalendar.getEvents(since, until);
-        let targetEvents = targetCalendar.getEvents(since, until);
+        let window = getSyncWindow();
+        let sourceEvents = sourceCalendar.getEvents(window.since, window.until);
+        let targetEvents = targetCalendar.getEvents(window.since, window.until);
 
-        let sourceEvent, targetEvent;
-
-        function searchIdentialEvent(sourceEvent, targetEvents, prefix) {
-
-            for (let targetEventIndex in targetEvents) // if the secondary event has already been blocked in the primary calendar, ignore it
-            {
-
+        function searchIdenticalEvent(sourceEvent) {
+            // if the secondary event has already been blocked in the primary calendar, ignore it
+            for (let targetEventIndex = 0; targetEventIndex < targetEvents.length; targetEventIndex++) {
+                let targetEvent = targetEvents[targetEventIndex];
                 if (
-                    (targetEvents[targetEventIndex].getStartTime().getTime() == sourceEvent.getStartTime().getTime())
+                    (targetEvent.getStartTime().getTime() == sourceEvent.getStartTime().getTime())
                     &&
-                    (targetEvents[targetEventIndex].getEndTime().getTime() == sourceEvent.getEndTime().getTime())
+                    (targetEvent.getEndTime().getTime() == sourceEvent.getEndTime().getTime())
                     &&
                     (
-                        targetEvents[targetEventIndex].getDescription().endsWith(config.identifierTemplate.replace('.*', sourceEvent.getId()))
+                        targetEvent.getDescription().endsWith(buildIdentifier(sourceEvent.getId()))
                         ||
-                        sourceEvent.getDescription().endsWith('[' + targetEvents[targetEventIndex].getId() + ':mwlsync]')
+                        sourceEvent.getDescription().endsWith('[' + targetEvent.getId() + ':mwlsync]')
                     )
                 ) {
                     return targetEventIndex;
                 }
             }
-            return false;
+            return -1;
         }
 
-        for (let sourceEventIndex in sourceEvents) {
-            sourceEvent = sourceEvents[sourceEventIndex];
-            if (sourceEvent.getMyStatus() != CalendarApp.GuestStatus.YES && sourceEvent.getMyStatus() != CalendarApp.GuestStatus.OWNER) {
-                console.log('skipping ' + sourceEvent.getTitle() + ' because not confirmed attendance yet: ' + sourceEvent.getMyStatus());
+        for (let sourceEvent of sourceEvents) {
+            let myStatus = sourceEvent.getMyStatus();
+            // Events you created without other guests report a null status, but
+            // they are still your own busy time, so keep syncing them.
+            let attending = myStatus == null
+                || myStatus == CalendarApp.GuestStatus.YES
+                || myStatus == CalendarApp.GuestStatus.OWNER;
+            if (!attending) {
+                console.log('skipping ' + sourceEvent.getTitle() + ' because not confirmed attendance yet: ' + myStatus);
                 continue;
             }
             // don't copy it because we'll end up in a loop!
@@ -84,16 +92,16 @@ var calendarSync = function (configuration) {
                 continue;
 
             }
-            let identicalEventIndex = searchIdentialEvent(sourceEvent, targetEvents, prefix);
+            let identicalEventIndex = searchIdenticalEvent(sourceEvent);
 
-            if (identicalEventIndex) {
+            if (identicalEventIndex !== -1) {
                 console.log('skipping ' + sourceEvent.getTitle());
                 targetEvents.splice(identicalEventIndex, 1);
                 continue;
             }
 
 
-            var meetingDetails = {
+            let meetingDetails = {
                 'title': prefix,
                 'context': {
                     'description': ''
@@ -113,27 +121,24 @@ var calendarSync = function (configuration) {
                 default:
                     meetingDetails.title += 'busy';
             }
-            meetingDetails.context.description += '\n\n\n ' + config.identifierTemplate.replace('.*', sourceEvent.getId())
+            meetingDetails.context.description += '\n\n\n ' + buildIdentifier(sourceEvent.getId())
 
+            let newEvent;
             if (sourceEvent.isAllDayEvent()) {
-                var newEvent = targetCalendar.createAllDayEvent(meetingDetails.title, sourceEvent.getAllDayStartDate(), sourceEvent.getAllDayEndDate(), meetingDetails.context);
-                newEvent
-                newEvent.removeAllReminders();
-                continue;
+                newEvent = targetCalendar.createAllDayEvent(meetingDetails.title, sourceEvent.getAllDayStartDate(), sourceEvent.getAllDayEndDate(), meetingDetails.context);
+            } else {
+                newEvent = targetCalendar.createEvent(meetingDetails.title, sourceEvent.getStartTime(), sourceEvent.getEndTime(), meetingDetails.context);
             }
-
-            var newEvent = targetCalendar.createEvent(meetingDetails.title, sourceEvent.getStartTime(), sourceEvent.getEndTime(), meetingDetails.context);
-            newEvent.set
             newEvent.removeAllReminders();
         }
 
         // clean up rogue events. These were probably moved, deleted... who knows?
-        for (let targetEventIndex in targetEvents) {
-            if (!identifierRegex.test(targetEvents[targetEventIndex].getDescription())) {
-              continue;
+        for (let targetEvent of targetEvents) {
+            if (!identifierRegex.test(targetEvent.getDescription())) {
+                continue;
             }
-            console.log('deleting ' + targetEvents[targetEventIndex].getTitle());
-            targetEvents[targetEventIndex].deleteEvent();
+            console.log('deleting ' + targetEvent.getTitle());
+            targetEvent.deleteEvent();
         }
 
     }
@@ -158,14 +163,14 @@ var calendarSync = function (configuration) {
     }
 
     var cleanExternalCalendar = function () {
-        calendar = CalendarApp.getCalendarById(config.externalCalendarId);
-        cleanCalendar(calendar, config.internalPrefix);
-    }
+        let calendar = CalendarApp.getCalendarById(config.externalCalendarId);
+        cleanCalendar(calendar);
+    };
 
     var cleanInternalCalendar = function () {
-        calendar = CalendarApp.getCalendarById(config.internalCalendarId);
-        cleanCalendar(calendar, config.externalPrefix);
-    }
+        let calendar = CalendarApp.getCalendarById(config.internalCalendarId);
+        cleanCalendar(calendar);
+    };
 
     return {
         'cleanExternalCalendar': cleanExternalCalendar,
@@ -194,5 +199,3 @@ function runOutboundSync() {
 function runInboundSync() {
     calendarSync.inboundSync();
 }
-
-
