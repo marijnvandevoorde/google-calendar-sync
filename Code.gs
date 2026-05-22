@@ -24,6 +24,12 @@ var calendarSync = function (configuration) {
     let config = configuration;
     let identifierRegex = new RegExp(config.identifierTemplate + '$');
 
+    // How hard to retry a single Calendar API call before giving up on it for
+    // this run. Short backoff smooths over brief rate-limit bursts; a hard
+    // quota block is left for the next scheduled run to pick up.
+    let maxAttempts = 3;
+    let initialBackoffMs = 2000;
+
     function getSyncWindow() {
         let since = new Date();
         since.setDate(since.getDate() - config.daysInPast);
@@ -36,46 +42,170 @@ var calendarSync = function (configuration) {
         return config.identifierTemplate.replace('.*', eventId);
     }
 
+    // Runs a Calendar API call, retrying with exponential backoff so transient
+    // rate limiting doesn't abort the whole sync. Returns the call's result, or
+    // null if it kept failing - in that case the run simply continues and the
+    // next sync retries whatever was left.
+    function withRetry(label, operation) {
+        let backoffMs = initialBackoffMs;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return operation();
+            } catch (error) {
+                if (attempt === maxAttempts) {
+                    console.error('giving up on ' + label + ' after ' + maxAttempts + ' attempts: ' + error);
+                    return null;
+                }
+                console.warn('could not ' + label + ' (attempt ' + attempt + '): ' + error + ' - retrying in ' + backoffMs + 'ms');
+                Utilities.sleep(backoffMs);
+                backoffMs *= 2;
+            }
+        }
+        return null;
+    }
+
     function cleanCalendar(calendar) {
         let window = getSyncWindow();
-        let events = calendar.getEvents(window.since, window.until);
+        let events = withRetry('read events', function () {
+            return calendar.getEvents(window.since, window.until);
+        });
+        if (events == null) {
+            return;
+        }
 
         for (let currentEvent of events) {
-            if (identifierRegex.test(currentEvent.getDescription())) {
+            if (!identifierRegex.test(currentEvent.getDescription())) {
+                continue;
+            }
+            let deleted = withRetry('delete "' + currentEvent.getTitle() + '"', function () {
                 currentEvent.deleteEvent();
-                console.log("Deleted " + currentEvent.getTitle());
+                return true;
+            });
+            if (deleted) {
+                console.log('Deleted ' + currentEvent.getTitle());
             }
         }
     }
 
+    // Builds the title/description/location a synced copy should have. The
+    // identifier is appended to the description so the copy can be recognized
+    // (and matched back to its source) on later runs.
+    function buildMeetingDetails(sourceEvent, prefix, transparency) {
+        let details = {
+            'title': prefix + 'busy',
+            'description': '',
+            'location': ''
+        };
+        if (transparency === 'full' || transparency === 'title') {
+            details.title = prefix + sourceEvent.getTitle();
+        }
+        if (transparency === 'full') {
+            details.description = sourceEvent.getDescription();
+            details.location = sourceEvent.getLocation() || '';
+        }
+        details.description += '\n\n\n ' + buildIdentifier(sourceEvent.getId());
+        return details;
+    }
+
+    function createSyncedEvent(targetCalendar, sourceEvent, details) {
+        let options = {'description': details.description, 'location': details.location};
+        let newEvent = withRetry('create "' + details.title + '"', function () {
+            if (sourceEvent.isAllDayEvent()) {
+                return targetCalendar.createAllDayEvent(details.title, sourceEvent.getAllDayStartDate(), sourceEvent.getAllDayEndDate(), options);
+            }
+            return targetCalendar.createEvent(details.title, sourceEvent.getStartTime(), sourceEvent.getEndTime(), options);
+        });
+        if (newEvent == null) {
+            return;
+        }
+        console.log('created ' + details.title);
+        withRetry('remove reminders from "' + details.title + '"', function () {
+            newEvent.removeAllReminders();
+            return true;
+        });
+    }
+
+    // Updates an existing synced copy in place (mostly a move to a new time)
+    // instead of deleting and recreating it. Only the fields that actually
+    // changed are written, so a moved event usually costs a single API write.
+    function updateSyncedEvent(targetCalendar, targetEvent, sourceEvent, details) {
+        if (sourceEvent.isAllDayEvent() !== targetEvent.isAllDayEvent()) {
+            // There is no clean in-place conversion between all-day and timed
+            // events, so fall back to replacing it.
+            console.log('replacing ' + targetEvent.getTitle() + ' (switched all-day/timed)');
+            let deleted = withRetry('delete "' + targetEvent.getTitle() + '"', function () {
+                targetEvent.deleteEvent();
+                return true;
+            });
+            if (deleted) {
+                createSyncedEvent(targetCalendar, sourceEvent, details);
+            }
+            return;
+        }
+
+        console.log('moving ' + targetEvent.getTitle());
+        withRetry('update "' + details.title + '"', function () {
+            if (!timesMatch(targetEvent, sourceEvent)) {
+                if (sourceEvent.isAllDayEvent()) {
+                    targetEvent.setAllDayDates(sourceEvent.getAllDayStartDate(), sourceEvent.getAllDayEndDate());
+                } else {
+                    targetEvent.setTime(sourceEvent.getStartTime(), sourceEvent.getEndTime());
+                }
+            }
+            if (targetEvent.getTitle() !== details.title) {
+                targetEvent.setTitle(details.title);
+            }
+            if (targetEvent.getDescription() !== details.description) {
+                targetEvent.setDescription(details.description);
+            }
+            if (targetEvent.getLocation() !== details.location) {
+                targetEvent.setLocation(details.location);
+            }
+            return true;
+        });
+    }
+
+    function timesMatch(targetEvent, sourceEvent) {
+        return targetEvent.getStartTime().getTime() == sourceEvent.getStartTime().getTime()
+            && targetEvent.getEndTime().getTime() == sourceEvent.getEndTime().getTime();
+    }
 
     function runSync(sourceCalendar, targetCalendar, prefix, transparency) {
         let window = getSyncWindow();
-        let sourceEvents = sourceCalendar.getEvents(window.since, window.until);
-        let targetEvents = targetCalendar.getEvents(window.since, window.until);
+        let sourceEvents = withRetry('read source events', function () {
+            return sourceCalendar.getEvents(window.since, window.until);
+        });
+        let targetEvents = withRetry('read target events', function () {
+            return targetCalendar.getEvents(window.since, window.until);
+        });
+        if (sourceEvents == null || targetEvents == null) {
+            console.error('skipping sync: could not read calendars');
+            return;
+        }
 
-        function searchIdenticalEvent(sourceEvent) {
-            // if the secondary event has already been blocked in the primary calendar, ignore it
-            for (let targetEventIndex = 0; targetEventIndex < targetEvents.length; targetEventIndex++) {
-                let targetEvent = targetEvents[targetEventIndex];
-                if (
-                    (targetEvent.getStartTime().getTime() == sourceEvent.getStartTime().getTime())
-                    &&
-                    (targetEvent.getEndTime().getTime() == sourceEvent.getEndTime().getTime())
-                    &&
-                    (
-                        targetEvent.getDescription().endsWith(buildIdentifier(sourceEvent.getId()))
-                        ||
-                        sourceEvent.getDescription().endsWith('[' + targetEvent.getId() + ':mwlsync]')
-                    )
-                ) {
-                    return targetEventIndex;
+        // A target event is a synced copy of sourceEvent when its description
+        // carries that source event's identifier.
+        function isCopyOf(targetEvent, sourceEvent) {
+            return targetEvent.getDescription().endsWith(buildIdentifier(sourceEvent.getId()))
+                || sourceEvent.getDescription().endsWith('[' + targetEvent.getId() + ':mwlsync]');
+        }
+
+        function findCopyIndex(sourceEvent, requireTimeMatch) {
+            for (let i = 0; i < targetEvents.length; i++) {
+                if (!isCopyOf(targetEvents[i], sourceEvent)) {
+                    continue;
                 }
+                if (requireTimeMatch && !timesMatch(targetEvents[i], sourceEvent)) {
+                    continue;
+                }
+                return i;
             }
             return -1;
         }
 
-        for (let sourceEvent of sourceEvents) {
+        // Only sync events you're attending, and never re-sync our own copies
+        // (that would create an endless sync loop between the calendars).
+        let eventsToSync = sourceEvents.filter(function (sourceEvent) {
             let myStatus = sourceEvent.getMyStatus();
             // Events you created without other guests report a null status, but
             // they are still your own busy time, so keep syncing them.
@@ -84,63 +214,55 @@ var calendarSync = function (configuration) {
                 || myStatus == CalendarApp.GuestStatus.OWNER;
             if (!attending) {
                 console.log('skipping ' + sourceEvent.getTitle() + ' because not confirmed attendance yet: ' + myStatus);
-                continue;
+                return false;
             }
-            // don't copy it because we'll end up in a loop!
             if (identifierRegex.test(sourceEvent.getDescription())) {
-                console.log('skipping ' + sourceEvent.getTitle());
-                continue;
-
+                console.log('skipping ' + sourceEvent.getTitle() + ' because it is a synced copy');
+                return false;
             }
-            let identicalEventIndex = searchIdenticalEvent(sourceEvent);
+            return true;
+        });
 
-            if (identicalEventIndex !== -1) {
-                console.log('skipping ' + sourceEvent.getTitle());
-                targetEvents.splice(identicalEventIndex, 1);
-                continue;
-            }
-
-
-            let meetingDetails = {
-                'title': prefix,
-                'context': {
-                    'description': ''
-                }
-            }
-            switch (transparency) {
-                case 'full':
-                    meetingDetails.title += sourceEvent.getTitle();
-                    meetingDetails.context = {
-                        'location': sourceEvent.getLocation(),
-                        'description': sourceEvent.getDescription()
-                    }
-                    break;
-                case 'title':
-                    meetingDetails.title += sourceEvent.getTitle();
-                    break;
-                default:
-                    meetingDetails.title += 'busy';
-            }
-            meetingDetails.context.description += '\n\n\n ' + buildIdentifier(sourceEvent.getId())
-
-            let newEvent;
-            if (sourceEvent.isAllDayEvent()) {
-                newEvent = targetCalendar.createAllDayEvent(meetingDetails.title, sourceEvent.getAllDayStartDate(), sourceEvent.getAllDayEndDate(), meetingDetails.context);
+        // Phase 1: claim copies that already match exactly (same identifier and
+        // same time) - those need no write at all. Doing this for every event
+        // before touching anything keeps unchanged recurring instances from
+        // being needlessly shuffled around in phase 2.
+        let movedOrNew = [];
+        for (let sourceEvent of eventsToSync) {
+            let exactIndex = findCopyIndex(sourceEvent, true);
+            if (exactIndex === -1) {
+                movedOrNew.push(sourceEvent);
             } else {
-                newEvent = targetCalendar.createEvent(meetingDetails.title, sourceEvent.getStartTime(), sourceEvent.getEndTime(), meetingDetails.context);
+                console.log('skipping ' + sourceEvent.getTitle() + ', already in sync');
+                targetEvents.splice(exactIndex, 1);
             }
-            newEvent.removeAllReminders();
         }
 
-        // clean up rogue events. These were probably moved, deleted... who knows?
+        // Phase 2: a copy may still exist for an event that moved - update it
+        // in place rather than deleting and recreating it. Otherwise the event
+        // is genuinely new and a copy is created.
+        for (let sourceEvent of movedOrNew) {
+            let details = buildMeetingDetails(sourceEvent, prefix, transparency);
+            let existingIndex = findCopyIndex(sourceEvent, false);
+            if (existingIndex === -1) {
+                createSyncedEvent(targetCalendar, sourceEvent, details);
+            } else {
+                let targetEvent = targetEvents.splice(existingIndex, 1)[0];
+                updateSyncedEvent(targetCalendar, targetEvent, sourceEvent, details);
+            }
+        }
+
+        // Clean up rogue events. These were probably deleted at the source.
         for (let targetEvent of targetEvents) {
             if (!identifierRegex.test(targetEvent.getDescription())) {
                 continue;
             }
             console.log('deleting ' + targetEvent.getTitle());
-            targetEvent.deleteEvent();
+            withRetry('delete "' + targetEvent.getTitle() + '"', function () {
+                targetEvent.deleteEvent();
+                return true;
+            });
         }
-
     }
 
     function inboundSync() {

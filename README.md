@@ -27,5 +27,9 @@ One last thing to do is to add triggers. The most important one is to create a t
 
 ![image](https://user-images.githubusercontent.com/1446282/124564507-701b2600-de41-11eb-8d71-0776bbd3d068.png)
 
-## Known issues
-If you have too many meetings in the upcoming x days, you'll run into the rate-limiting of google calendar. No worries. Syncing it multiple times will still eventually sync all your meetings. As the script will then run with every update, it will only do incremental updates, so the amount of meeting creation & deletion **should** remain minimal and never cause any issues.
+## Rate limiting
+If you have a lot of meetings in the upcoming x days, you may run into the rate-limiting of Google Calendar. The script handles this gracefully:
+- Every calendar operation is retried with exponential backoff. If it still fails, the run skips that one event and keeps going instead of aborting, so the next sync simply picks up whatever was left.
+- Moved events are updated **in place** rather than deleted and recreated, and only the fields that actually changed are written. This keeps the number of write operations (and therefore the chance of hitting rate limits) to a minimum.
+
+Because the script does incremental updates, a steady-state sync only writes when something genuinely changes.
