@@ -17,7 +17,8 @@ let config = {
     // used verbatim both to build identifiers and as a RegExp to recognize them.
     // Avoid regex special characters: replace xxx and yyy with your prefixes
     // and stick to alphanumeric characters.
-    'identifierTemplate': '<xxx:.*:yyy>'
+    'identifierTemplate': '<xxx:.*:yyy>',
+    'disabled': false
 };
 
 var calendarSync = function (configuration) {
@@ -212,6 +213,7 @@ var calendarSync = function (configuration) {
     }
 
     function runSync(sourceCalendar, targetCalendar, prefix, transparency) {
+        if (config.disabled === true) return;
         let window = getSyncWindow();
         let sourceEvents = withRetry('read source events', function () {
             return sourceCalendar.getEvents(window.since, window.until);
