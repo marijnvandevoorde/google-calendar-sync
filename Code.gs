@@ -17,7 +17,8 @@ let config = {
     // used verbatim both to build identifiers and as a RegExp to recognize them.
     // Avoid regex special characters: replace xxx and yyy with your prefixes
     // and stick to alphanumeric characters.
-    'identifierTemplate': '<xxx:.*:yyy>'
+    'identifierTemplate': '<xxx:.*:yyy>',
+    'disabled': false
 };
 
 var calendarSync = function (configuration) {
@@ -29,6 +30,20 @@ var calendarSync = function (configuration) {
     // quota block is left for the next scheduled run to pick up.
     let maxAttempts = 3;
     let initialBackoffMs = 2000;
+
+    // Set once a "too many times for one day" exception is seen. Every further
+    // Calendar call in this run then no-ops immediately - retrying or trying
+    // more operations only burns execution time on quota that won't recover
+    // until tomorrow.
+    let dailyQuotaExhausted = false;
+
+    function isDailyQuotaError(error) {
+        if (error == null) {
+            return false;
+        }
+        let message = error.message ? error.message : String(error);
+        return message.indexOf('too many times for one day') !== -1;
+    }
 
     function getSyncWindow() {
         let since = new Date();
@@ -45,13 +60,23 @@ var calendarSync = function (configuration) {
     // Runs a Calendar API call, retrying with exponential backoff so transient
     // rate limiting doesn't abort the whole sync. Returns the call's result, or
     // null if it kept failing - in that case the run simply continues and the
-    // next sync retries whatever was left.
+    // next sync retries whatever was left. The daily-quota error is a special
+    // case: there is no point retrying it within the same day, so it flips the
+    // dailyQuotaExhausted flag and every subsequent call short-circuits.
     function withRetry(label, operation) {
+        if (dailyQuotaExhausted) {
+            return null;
+        }
         let backoffMs = initialBackoffMs;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 return operation();
             } catch (error) {
+                if (isDailyQuotaError(error)) {
+                    console.error('daily Calendar quota exhausted on ' + label + ' - skipping the rest of this run: ' + error);
+                    dailyQuotaExhausted = true;
+                    return null;
+                }
                 if (attempt === maxAttempts) {
                     console.error('giving up on ' + label + ' after ' + maxAttempts + ' attempts: ' + error);
                     return null;
@@ -62,6 +87,23 @@ var calendarSync = function (configuration) {
             }
         }
         return null;
+    }
+
+    // Serializes runs against a script-wide mutex. Without this, two triggers
+    // firing close together (e.g. inbound and outbound both on "calendar
+    // changed") read the calendars before either writes, both decide the same
+    // copy is missing, and both create it - producing duplicates.
+    function withScriptLock(label, operation) {
+        let lock = LockService.getScriptLock();
+        if (!lock.tryLock(30000)) {
+            console.log('skipping ' + label + ': another sync is already running');
+            return;
+        }
+        try {
+            operation();
+        } finally {
+            lock.releaseLock();
+        }
     }
 
     function cleanCalendar(calendar) {
@@ -171,6 +213,7 @@ var calendarSync = function (configuration) {
     }
 
     function runSync(sourceCalendar, targetCalendar, prefix, transparency) {
+        if (config.disabled === true) return;
         let window = getSyncWindow();
         let sourceEvents = withRetry('read source events', function () {
             return sourceCalendar.getEvents(window.since, window.until);
@@ -266,32 +309,40 @@ var calendarSync = function (configuration) {
     }
 
     function inboundSync() {
-        runSync(
-            CalendarApp.getCalendarById(config.externalCalendarId),
-            CalendarApp.getCalendarById(config.internalCalendarId),
-            config.externalPrefix,
-            config.externalTransparency
-        )
+        withScriptLock('inboundSync', function () {
+            runSync(
+                CalendarApp.getCalendarById(config.externalCalendarId),
+                CalendarApp.getCalendarById(config.internalCalendarId),
+                config.externalPrefix,
+                config.externalTransparency
+            );
+        });
     }
 
 
     function outboundSync() {
-        runSync(
-            CalendarApp.getCalendarById(config.internalCalendarId),
-            CalendarApp.getCalendarById(config.externalCalendarId),
-            config.internalPrefix,
-            config.internalTransparency
-        )
+        withScriptLock('outboundSync', function () {
+            runSync(
+                CalendarApp.getCalendarById(config.internalCalendarId),
+                CalendarApp.getCalendarById(config.externalCalendarId),
+                config.internalPrefix,
+                config.internalTransparency
+            );
+        });
     }
 
     var cleanExternalCalendar = function () {
-        let calendar = CalendarApp.getCalendarById(config.externalCalendarId);
-        cleanCalendar(calendar);
+        withScriptLock('cleanExternalCalendar', function () {
+            let calendar = CalendarApp.getCalendarById(config.externalCalendarId);
+            cleanCalendar(calendar);
+        });
     };
 
     var cleanInternalCalendar = function () {
-        let calendar = CalendarApp.getCalendarById(config.internalCalendarId);
-        cleanCalendar(calendar);
+        withScriptLock('cleanInternalCalendar', function () {
+            let calendar = CalendarApp.getCalendarById(config.internalCalendarId);
+            cleanCalendar(calendar);
+        });
     };
 
     return {
