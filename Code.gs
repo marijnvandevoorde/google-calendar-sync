@@ -129,20 +129,14 @@ var calendarSync = function (configuration) {
         }
     }
 
-    // Builds the title/description/location/availability a synced copy should
-    // have. The identifier is appended to the description so the copy can be
-    // recognized (and matched back to its source) on later runs.
-    //
-    // Note: the `transparency` argument is the config's detail level
-    // ('full'/'title'/'free-busy'). `availability` is a separate thing - the
-    // event's own Busy/Free state (CalendarApp.EventTransparency) - which we
-    // copy verbatim from the source so a "Free" event doesn't block time.
+    // Builds the title/description/location a synced copy should have. The
+    // identifier is appended to the description so the copy can be recognized
+    // (and matched back to its source) on later runs.
     function buildMeetingDetails(sourceEvent, prefix, transparency) {
         let details = {
             'title': prefix + 'busy',
             'description': '',
-            'location': '',
-            'availability': sourceEvent.getTransparency()
+            'location': ''
         };
         if (transparency === 'full' || transparency === 'title') {
             details.title = prefix + sourceEvent.getTitle();
@@ -171,14 +165,6 @@ var calendarSync = function (configuration) {
             newEvent.removeAllReminders();
             return true;
         });
-        // New events default to OPAQUE (Busy), so only write when the source is
-        // marked Free - keeps an extra API call off the common path.
-        if (details.availability === CalendarApp.EventTransparency.TRANSPARENT) {
-            withRetry('set free/busy on "' + details.title + '"', function () {
-                newEvent.setTransparency(details.availability);
-                return true;
-            });
-        }
     }
 
     // Updates an existing synced copy in place (mostly a move to a new time)
@@ -216,9 +202,6 @@ var calendarSync = function (configuration) {
             }
             if (targetEvent.getLocation() !== details.location) {
                 targetEvent.setLocation(details.location);
-            }
-            if (targetEvent.getTransparency() !== details.availability) {
-                targetEvent.setTransparency(details.availability);
             }
             return true;
         });
@@ -277,6 +260,12 @@ var calendarSync = function (configuration) {
                 || myStatus == CalendarApp.GuestStatus.OWNER;
             if (!attending) {
                 console.log('skipping ' + sourceEvent.getTitle() + ' because not confirmed attendance yet: ' + myStatus);
+                return false;
+            }
+            // A "Free" event doesn't occupy your time, so there's nothing to
+            // block on the other calendar - don't copy it at all.
+            if (sourceEvent.getTransparency() === CalendarApp.EventTransparency.TRANSPARENT) {
+                console.log('skipping ' + sourceEvent.getTitle() + ' because it is marked Free');
                 return false;
             }
             if (identifierRegex.test(sourceEvent.getDescription())) {
