@@ -246,8 +246,7 @@ var calendarSync = function (configuration) {
         // A target event is a synced copy of sourceEvent when its description
         // carries that source event's identifier.
         function isCopyOf(targetEvent, sourceEvent) {
-            return targetEvent.getDescription().endsWith(buildIdentifier(sourceEvent.getId()))
-                || sourceEvent.getDescription().endsWith('[' + targetEvent.getId() + ':mwlsync]');
+            return targetEvent.getDescription().endsWith(buildIdentifier(sourceEvent.getId()));
         }
 
         function findCopyIndex(sourceEvent, requireTimeMatch) {
@@ -267,9 +266,13 @@ var calendarSync = function (configuration) {
         // (that would create an endless sync loop between the calendars).
         let eventsToSync = sourceEvents.filter(function (sourceEvent) {
             let myStatus = sourceEvent.getMyStatus();
-            // Events you created without other guests report a null status, but
-            // they are still your own busy time, so keep syncing them.
-            let attending = myStatus == null
+            // Detecting "my own event" via the OWNER status became unreliable
+            // after a Google change, so also treat anything you created (per
+            // getCreators) as yours. Events you created without other guests
+            // additionally report a null status. Either way it's your busy time.
+            let iAmCreator = sourceEvent.getCreators().indexOf(sourceCalendar.getId()) !== -1;
+            let attending = iAmCreator
+                || myStatus == null
                 || myStatus == CalendarApp.GuestStatus.YES
                 || myStatus == CalendarApp.GuestStatus.OWNER;
             if (!attending) {
