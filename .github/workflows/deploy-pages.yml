@@ -29,7 +29,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Build TypeScript (app.js + sw.js)
         working-directory: math-practice
@@ -39,9 +39,6 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          # Enable Pages automatically on first run (needs no manual setting).
-          enablement: true
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
