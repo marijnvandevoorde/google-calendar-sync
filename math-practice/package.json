@@ -1,0 +1,17 @@
+{
+  "name": "math-adventure",
+  "version": "1.0.0",
+  "description": "A colorful, offline-capable arithmetic practice PWA for kids aged 6-9.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.sw.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "icons": "node scripts/build-icons.cjs",
+    "serve": "node scripts/serve.cjs",
+    "start": "npm run build && npm run serve"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

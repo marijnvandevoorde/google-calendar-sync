@@ -357,3 +357,63 @@ input[type="range"]::-moz-range-thumb {
   pointer-events: none;
   z-index: 70;
 }
+
+/* ===== Responsive: tablets / iPad (bigger, roomier) ===== */
+@media (min-width: 700px) {
+  #app { max-width: 720px; }
+  .equation {
+    font-size: clamp(56px, 9vw, 92px);
+    border-radius: 36px;
+    padding: 40px 30px;
+  }
+  .mascot { font-size: clamp(72px, 11vw, 120px); }
+  .numpad { gap: 16px; padding: 14px 24px calc(20px + env(safe-area-inset-bottom)); }
+  .key { border-radius: 28px; font-size: clamp(34px, 5.5vw, 48px); padding: 22px 0; }
+  .score, .streak { font-size: 24px; }
+  .icon-btn { width: 54px; height: 54px; font-size: 28px; }
+}
+
+/* ===== Responsive: landscape phones (height-constrained) ===== */
+/* Play area and numpad sit side by side so nothing is cut off. */
+@media (orientation: landscape) and (max-height: 600px) {
+  #app {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    max-width: 960px;
+  }
+  .topbar { width: 100%; padding: 8px 16px 0; }
+  .play {
+    flex: 1 1 52%;
+    order: 1;
+    padding: 4px 12px;
+    gap: 6px;
+  }
+  .numpad {
+    flex: 0 0 clamp(240px, 40vw, 340px);
+    order: 2;
+    align-self: center;
+    gap: 8px;
+    padding: 4px 16px;
+  }
+  .mascot { font-size: clamp(32px, 8vh, 56px); }
+  .equation {
+    font-size: clamp(28px, 8vh, 56px);
+    padding: 14px 16px;
+    border-radius: 22px;
+  }
+  .feedback { min-height: 22px; font-size: clamp(16px, 4vh, 22px); }
+  .key {
+    font-size: clamp(20px, 5.5vh, 32px);
+    padding: clamp(6px, 1.6vh, 14px) 0;
+    border-radius: 18px;
+  }
+}
+
+/* Respect users who prefer less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .mascot.happy, .mascot.sad,
+  .answer-box.correct, .answer-box.wrong,
+  .modal { animation: none !important; }
+  .fly-answer { transition: opacity 0.2s linear !important; }
+}
